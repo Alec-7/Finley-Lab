@@ -1,0 +1,150 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+#CUSTOMIZE THE FOLLOWING VARIABLES FOR EACH ANALYSIS
+#ANYTHING BEFORE IMPORTING PACKAGES (library(readxl)) CAN BE CUSTOMIZED
+
+#Data should be stored with each sample stored in rows, and each measurement (protein level, RNA level, ect.) in each column 
+
+#This program alters several default settings to match the default outputs of SPSS Version 28 as closely as possible. This includes:
+#The Lilliefors significance correction on the Kolmogorov-Smirnov test
+#Levene Test based on the mean
+
+#The Kruskal-Waalis post-hoc test p-values will not exactly match between softwares: SPSS uses the Bonferroni correction, while R uses the Benjamini-Hochberg correction
+
+#Path to file to analyze
+filePath<-'D:\\RT-qPCR\\Elav AB8 Drugs 5d Treatment RT-qPCR Aug 2022\\Elav AB8 Drug Treated Quantification Summary.xlsx'
+
+#Sheet in the excel file to analyze
+sheetToAnalyze<-c('SPSS Summary')
+
+#Column that identifies the condition for each row
+factorColumn<-2
+
+#Columns with continuous data to analyze
+columnsToAnalyze<-c(4:13)
+
+#Cutoff for p-values to select appropriate tests
+pCutoff<-0.05
+
+#If true, copies the original data used into the final sheet 
+saveOGdata<-TRUE
+
+library('readxl')
+library('openxlsx')
+library('car')
+library('FSA')
+library('rstatix')
+library('nortest')
+library('plyr')
+
+
+
+#Download data
+rawData<-read_excel(filePath,sheet = sheetToAnalyze)
+factorColName<-colnames(rawData)[factorColumn]
+numFactors<-length(levels(as.factor(rawData[[factorColName]])))
+
+#Store results of preliminary tests
+prelimTests<-data.frame(matrix(nrow = length(columnsToAnalyze),ncol = 4))
+rownames(prelimTests)<-colnames(rawData)[columnsToAnalyze]
+colnames(prelimTests)<-c('Kolmogorov-Smirnov test of Normality','One-Way ANOVA','Levene test for Equality of Variances','Kruskal-Wallis test')
+
+#Store summary statistics
+sumStats<-data.frame(matrix(nrow=numFactors,ncol=0))
+oneColSpacer<-data.frame(matrix(ncol=1,nrow = numFactors))
+colnames(oneColSpacer)<-""
+
+
+#Create list with preliminary and post-hoc test results for excel sheet
+excelData<-list()
+
+for(dataCol in columnsToAnalyze){
+  #Create a data frame with just one column, and remove NAs
+  dataColName<-colnames(rawData)[dataCol]
+  pitaDF<-na.omit(data.frame(condition=rawData[[dataCol]],factor=as.factor(rawData[[factorColName]])))
+  
+  #Generate summary statistics
+  conditionSummary<-ddply(pitaDF, .(factor), summarize, mean=mean(condition), StDev=sd(condition), n=length(condition), SEM=sd(condition)/sqrt(length(condition)))
+  #If not all factors are used, append extra rows to the bottom
+  if(nrow(conditionSummary)<numFactors){
+    blankRows<-data.frame(matrix(ncol = 5,nrow = numFactors-nrow(conditionSummary)))
+    colnames(blankRows)<-colnames(conditionSummary)
+    conditionSummary<-rbind(conditionSummary,blankRows)
+  }
+  #Append Summary Statistics to storage
+  sumStats<-cbind(sumStats,conditionSummary,oneColSpacer)
+  
+  #Kolmogorov-Smirnov test to see if data is parametric (aka normally distributed). p<pCutoff: data is NOT parametric
+  ksResult<-lillie.test(rawData[[dataCol]])
+  #ksResult<-ks.test(rawData[[dataCol]],'pnorm',mean=mean(rawData[[dataCol]]),sd=sd(rawData[[dataCol]]))
+  
+  #Store p-value
+  prelimTests[colnames(rawData)[dataCol],1]<-ksResult[[2]]
+  
+  if(ksResult[[2]]>pCutoff){
+    #For parametric data, ANOVA to see if any data is significant. p<pCutoff: data is significant
+    anovaResult<-aov(condition~factor,pitaDF)
+    
+    #Store p-value
+    prelimTests[colnames(rawData)[dataCol],2]<-summary(anovaResult)[[1]][[5]][1]
+    
+    if(summary(anovaResult)[[1]][[5]][1]<pCutoff){
+      #For significant data, Levene Test to see if conditions have equal variance
+      leveneResult<-leveneTest(condition~factor,pitaDF,center='mean')
+      
+      #Store p-value
+      prelimTests[colnames(rawData)[dataCol],3]<-leveneResult[[3]][1]
+    
+      if(leveneResult[[3]][1]>pCutoff){
+        #For data with conditions with equal variance, Tukey HSD post-hoc test to see significance between individual conditions
+        tukeyPostHoc<-TukeyHSD(anovaResult)
+        phSheetName<-paste(colnames(rawData)[dataCol],'Tukey Post-Hoc')
+        excelData[[phSheetName]]=tukeyPostHoc[[1]]
+      }
+      else{
+        #For data with conditions without equal variance, Games-Howell post-hoc test to see significance between individual conditions
+        
+        ghPostHoc<-games_howell_test(pitaDF,condition~factor)
+        phSheetName<-paste(colnames(rawData)[dataCol],'G-H Post-Hoc')
+        excelData[[phSheetName]]<-ghPostHoc
+      }
+    }
+  }
+  else{
+    #For non-parametric data, Kruskal-Wallis test to see if any data is significant. p<pCutoff: data is significant
+    kwResult<-kruskal.test(condition~factor,pitaDF)
+    
+    #Store p-value
+    prelimTests[colnames(rawData)[dataCol],4]<-kwResult[[3]]
+      
+    if(kwResult[[3]]<pCutoff){
+      #For significant data, Dunn Test to see significance between individual conditions
+      kwPostHoc<-dunnTest(rawData[[dataCol]]~as.factor(rawData[[factorColName]]))
+      phSheetName<-paste(colnames(rawData)[dataCol],'K-W Post-Hoc')
+      excelData[[phSheetName]]<-kwPostHoc[[2]]
+    }
+  }
+}
+excelData<-append(list('Summary Statistics'= sumStats,'Preliminary Tests'= prelimTests),excelData)
+
+#Copy original data
+if(saveOGdata){
+  excelData[['Original Data']]<-rawData
+}
+write.xlsx(excelData,paste('Processed_',basename(filePath),sep=''),rowNames=TRUE)
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

@@ -1,0 +1,144 @@
+---
+title: "Geotaxis Analysis"
+output: html_document
+date: "2023-01-09"
+---
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+#CUSTOMIZE THE FOLLOWING VARIABLES FOR EACH ANALYSIS
+#ANYTHING BEFORE IMPORTING PACKAGES (library(readxl)) CAN BE CUSTOMIZED
+
+#Path to file to analyze
+#Make sure there is data in the first row & first column, or the file may not import into R correctly
+filePath="C:\\Users\\COS-FinleyLabUser\\Downloads\\TBI 3-weeks AB Elav-Repo Drugs 12-17.xlsx"
+
+#Vector that stores which sheets to analyze. To analyze all sheets, set to NA
+sheetsToAnalyze<-NA #c('W1118-CS','ELAV-AB42WT','ELAV-AB8','REPO-AB42WT','REPO-AB8')
+
+#Maximum number of replicates to analyze (allows for metadata storage below replicates)
+maxReps<-4
+
+
+#Program assumes that within an individual column, the name of the condition does not change from replicate to replicate.
+#Program assumes every set is formatted the same, and every replicate within the set is formatted the same.
+#Program assumes that within a replicate, flies are scored from 0 to 6. Data is stored vertically, with 6 at the top and 0 at the bottom, with the name of the condition above 6. 
+#Ex:
+#Name  Control
+#6        3
+#5        8
+#4        4
+#3        1
+#2        1
+#1        0
+#0        5
+
+#The following variables change which cells has count data. These only need to be changed if the template changes.
+
+#Number of columns before the first set
+horizontalOffset=0
+#Number of columns in a set
+horizontalSetSize=9
+#First column within a set that has count data
+horizontalDataStarts=2
+#First column within a set that has count data
+horizontalDataStops=8
+
+#Number of rows before the first replicate
+verticalOffset=1
+#Number of rows in each replicate
+verticalReplicateSize=13 #NOT CURRENTLY IMPLEMENTED: HAS NO EFFECT
+#First row within a replicate that has data
+verticalDataStarts=4 #NOT CURRENTLY IMPLEMENTED: HAS NO EFFECT
+#Score of the t
+
+library(readxl)
+library(openxlsx)
+library(lme4)
+library(lmerTest)
+library(lsmeans)
+
+outputList<-list()
+qc<-list()
+
+
+for(z in excel_sheets(filePath)){
+  #Checks whether sheet z should be analyzed
+  if(is.na(sheetsToAnalyze)||z %in% sheetsToAnalyze){
+    #load dataset
+    rawDat <- read_excel(filePath,sheet = z,col_names = FALSE)
+    #Initialize dataset for reformatted data
+    dat<-data.frame(matrix(ncol=4,nrow=0))
+    colnames(dat)<-c("tube","replicate","treatment","condition")
+    
+    for(col in (horizontalOffset+1):ncol(rawDat)){
+      #Calculate which set this is
+      setNum<-floor((col-horizontalOffset)/horizontalSetSize)+1
+      setPos<-(col-horizontalOffset)%%horizontalSetSize
+      #Isolate columns with count data
+      if(setPos>=horizontalDataStarts & setPos<=horizontalDataStops){
+        #Find condition of this vial. Assumed to be the cell above where data collection starts on the first replicate.
+        colCondition<-as.character(rawDat[verticalDataStarts+verticalOffset-1,col])
+        for(ro in (verticalOffset+1):nrow(rawDat)){
+          #Calculate which replicate this is
+          repNum<-floor((ro-verticalOffset)/verticalReplicateSize)+1
+          #Calculate which cell 
+          repPos<-(ro-verticalOffset)%%verticalReplicateSize
+          posValue<-10-repPos
+          #Isolate rows where data is collected
+          if((posValue>=0) & (posValue<=6) & repNum<=maxReps){
+            #Check to make sure there is at least one count for that value
+            if(!is.na(rawDat[ro,col]) & as.integer(rawDat[ro,col])>0){
+              #Add a row to the reformatted data for each fly counted for that value
+              for(fly in 1:as.integer(rawDat[ro,col])){
+                dat[nrow(dat)+1,]<-data.frame(setNum,repNum,colCondition,posValue)
+            }
+            }
+          }
+        }
+      }
+    } 
+    
+
+    # fit random effects model
+    fit <- lmer(condition ~ treatment + (1 | tube/replicate) , data = dat)
+    #Optional data on model, random effects, and fixed effects
+    #summary(fit)
+    
+    
+    # contains the pairwise comparisons
+    means<-lsmeans(fit, pairwise ~ treatment)
+    contrasts<-as.data.frame(means[2])
+    colnames(contrasts)<-colnames(as.data.frame(means[1]))
+    output<-rbind(as.data.frame(means[1]),list("","","","","",""),list("","","","","",""),colnames(as.data.frame(means[2])),contrasts,list("","","","","",""),list("","","","","",""),list("","Total observations (number of flies*number of replicates)",as.character(nrow(dat)),"","",""))
+    outputList[[z]]<-output
+    qc[[paste(z,'_rawData')]]<-rawDat
+  }
+}
+write.xlsx(append(outputList,qc),paste(substr(filePath,1,nchar(filePath)-nchar(basename(filePath))),"Processed_",basename(filePath),sep=""))
+
+#EXPERIMENTAL
+#max<-0
+#for(i in qc){
+#  if(nrow(i)>max){
+#    max<-nrow(i)
+#  }
+#}
+#qcTest=list(data.frame(),data.frame(),data.frame(),data.frame(),data.frame(),data.frame())
+#for(j in 1:length(qc)){
+  #blanks<-data.frame(matrix(nrow=(max-nrow(qc[[j]])),ncol=4))
+  #colnames(blanks)<-colnames(qc[[j]])
+  #qcTest[j]<-data.frame(rbind(qc[[j]],blanks))
+#}
+#qcFinal=data.frame(matrix(nrow=max,ncol=0))
+#for(k in qc){
+#  qcFinal<-cbind(qcFinal,data.frame(k),data.frame(matrix(nrow=max,ncol=1)))
+#}
+
+```
+

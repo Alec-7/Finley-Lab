@@ -1,0 +1,321 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+NOTE: Right censoring can occur when "when a subject leaves the study before an event occurs, or the study ends before the event has occurred." We may be able to get preliminary results of an aging study by right censoring the flies that are still alive.
+
+TO DO:
+1. FIX COX HAZARD MODEL
+2. EXPORT .pptx FIGURES
+3. EXCEL SHEET TEMPLATE
+4. Export Excel Sheet with Day of Death
+
+```{r}
+#CUSTOMIZE THE FOLLOWING VARIABLES FOR EACH ANALYSIS
+#ANYTHING BEFORE IMPORTING PACKAGES (library(readxl)) CAN BE CUSTOMIZED
+
+#Works-in-progress:
+#Verify mortality index accuracy
+#-Don't create a folder if there's only one sheet to analyse
+#-Fix %Alive with censored (escaped or still alive) flies
+
+#VARIABLES AND PACKAGES:
+
+#Path to file to analyze
+fileName="C:\\Users\\COS-FinleyLabUser\\Downloads\\AGING_AND_TRAUMA_STUDY_MAR_2022\\March 2022 Aging Studies.xlsx"
+
+#Vector that stores which sheets to analyze. To analyze all sheets, set to NA.
+sheetsToAnalyze<-NA
+
+#Vector that stores start and stop dates for mortality index(es). Number of deaths between those dates, including those dates, are compared to the number of deaths afterwards. 
+#Format: c(start 1, stop 1, start 2, stop 2, ...). Length must be even. For no mortality index, set to NA
+MIdays<-c(7,8)
+
+#Age at beginning of experiment (including the starting date)
+ageAtStart<-1
+
+#First column with data
+firstCol<-2
+
+#Number of conditions. If NA, firstCol and all columns after firstCol are considered a condition
+numCons<-NA
+
+#If TRUE, copies the original data used
+keepOGData<-TRUE
+
+#Colors to customize R-generated figures. For default colors, set to NA
+colors<-NA
+#colors<-c('red','blue','green','purple','yellow','orange','brown','black','pink','grey')
+
+
+library(survival)
+library(survminer)
+library(dplyr)
+library(readxl)
+library(openxlsx)
+library(rstatix)
+
+
+#STEP 1: IMPORT AND PARSE DATA
+fileAb<-basename(fileName)
+dir.create(paste("Processed_",fileAb,sep = ''))
+setwd(paste("./Processed_",fileAb,sep=''))
+for(z in excel_sheets(fileName)){
+  #Checks whether z should be analyzed
+  if(is.na(sheetsToAnalyze)||z %in% sheetsToAnalyze){
+    df <- read_excel(fileName,sheet = z)
+    if(is.na(numCons)){
+      df<-df[,(firstCol:ncol(df))]
+      }else{
+      df<-df[,(firstCol:(firstCol+numCons-1))]
+      }
+    #Extra matrix adjusts for ageAtStart
+    extraRowsatStart<-data.frame(matrix(0,nrow = (ageAtStart-1),ncol = ncol(df)))
+    colnames(extraRowsatStart)<-colnames(df)
+    df<-rbind(extraRowsatStart,df)
+    
+    df2<-data.frame('value','status','condition')
+    colnames(df2)<-df2[1,]
+    
+    #For loops: goes cell by cell
+    for (cl in colnames(df)){
+      for (i in 1:length(df[[cl]]))
+        {
+        #n= cell constants
+        n=df[[i,cl]]
+        if (!is.na(n)){
+          if(grepl('+',n,fixed=TRUE)){
+            #number after '+' indicates the number of escaped flies
+            pI<-unlist(gregexpr(pattern ='\\+',n))
+    
+            m<-as.numeric(substr(n,pI+1,nchar(n)))
+            n<-as.numeric(substr(n,1,pI-1))
+            #for loop: adds rows. value = day of death (row), status = if data is censored (0 means yes, because fly escaped), condition = condition (column). Does this m times, where m is the number of flies that escaped
+            if (m>0){
+              for(k in 1:m){
+                dfT<-data.frame(value=as.character(i),status="0",condition=cl)
+                df2<-bind_rows(df2,dfT)
+              }
+            }
+          }
+          #for loop: adds rows. value = day of death (row), status = if data is censored (1 means no, because fly died), condition = condition (column). Does this m times, where n is the number of flies that died 
+          if(n>0){
+            for (j in 1:n){
+              dfT<-data.frame(value=as.character(i),status="1",condition=cl)
+              df2<-bind_rows(df2,dfT)
+            }
+          }
+        }
+      }
+    }
+    df2<-df2[-1,]
+    df2$value<-as.numeric(df2$value)
+    df2$status<-as.numeric(df2$status)
+    
+    df2_1<-df2%>%filter(status==1)
+    
+    df3<-data.frame(matrix(ncol = 1,nrow = length(df2_1$value)))
+    
+    for (p in colnames(df)){
+      filtered<-(df2_1%>%filter(condition==p))$value
+      length(filtered)<-length(df2_1$value)
+      filtered<-as.data.frame(filtered)
+      colnames(filtered)<-p
+      df3<-bind_cols(df3,filtered)
+      
+    }
+    df3<-df3[,-1]
+    df3s<-data.frame(matrix(nrow = length(colnames(df3)),ncol=4))
+    rownames(df3s)=colnames(df3)
+    colnames(df3s)=c('mean','stdev','n','SEM')
+    for (q in colnames(df3)){
+      newC<-filter(df3,!is.na(df3[,q]))[,q]
+      df3s[q,1]=mean(newC)
+      df3s[q,2]=sd(newC)
+      df3s[q,3]=length(newC)
+      df3s[q,4]=df3s[q,2]/sqrt(df3s[q,3])
+      }
+    
+    df3s$names=factor(rownames(df3s),levels = rownames(df3s))
+    
+    #Percent Alive
+    df5<-data.frame(matrix(nrow = nrow(df),ncol = ncol(df)))
+    colnames(df5)<-colnames(df)
+    for (s in 1:ncol(df)) {
+      totalDead<-0
+      n<-df3s[s,3]
+  
+      for(r in 1:nrow(df)){
+        if(!is.na(df[r,s]))
+          totalDead=totalDead+df[r,s]
+        df5[r,s]=100*(1-totalDead/n)
+      }
+    }
+  
+    
+    
+    #STEP 2: GENERATE FIGURES AND TESTS
+    
+    #Initialize Objects 
+    
+    #Time: Day of death. Event: Was data censored? (i.e. did the fly escape?) 0 = censored (fly escaped), 1 = uncensored (fly died)
+    surv_object<-Surv(time=df2$value,event = df2$status)
+    
+    # ~:specifies what the conditions (independent variables) are. 
+    fit1<-survfit(surv_object~condition,data = df2)
+    
+    #Plot Kaplan-Meier Survival Curves
+    
+    #pval: does log rank test (Done separately)
+    ggsurvplot(fit1, data = df2, pval = FALSE,risk.table.col= "value", pallete=colors)
+    
+    #With Confidence Intervals
+    ggsurvplot(fit1, data = df2, pval = FALSE,risk.table.col= "value", conf.int = TRUE)
+    
+    #print("Log-Rank Tests")
+    
+    #All conditions (ANOVA)
+    lr_a<-survdiff(surv_object~condition,data = df2)
+    lr_a
+    #Pairwise
+    lr_p<-pairwise_survdiff(Surv(value, status) ~ condition,data = df2)
+    lr_p
+    
+    #print("Cox Proportional Hazards")
+    
+    res.cox <- coxph(Surv(value, status) ~ condition, data = df2)
+    res.cox
+    
+    #print("Average Lifespan")
+    
+    #df_1<-gsub("+.","",rbind(unlist(lr_a[1]),df[,order(colnames(df))]))
+    #df_1<-rbind(unlist(lr_a[1]),df[,order(colnames(df))])
+    #df_2<-data.frame(matrix(nrow = length(rownames(df_1)),ncol = length(colnames(df_1))))
+    #colnames(df_2)<-colnames(df_1)
+    #for(i in colnames(df_1)){
+    #  dead<-0
+    #  for(j in 2:length(df_1[,j])){
+    #    dead<-dead+df_1[i,j]
+    #    df_2[i,j]<-100*(1-dead/df_1[1,j])
+    #  }
+    #}
+    #write.csv(df_2[-1,],"Percent Alive.csv",na='')
+    
+    #Pairwise t-tests 
+    tt_p<-pairwise.t.test(x=df2_1$value,g=df2_1$condition)
+    
+    #Mortality Index
+    if(!(is.na(MIdays)||is.null(MIdays)||length(MIdays)==0)){
+      if(length(MIdays)%%2==0){
+        if((length(colnames(df3))+1)>6){
+          df6<-data.frame(matrix(nrow=8,ncol=(length(colnames(df3))+1)*length(MIdays)/2))
+          #colnames(df6)<-rep(c(colnames(df3),''),length(MIdays)/2) MOVE TO AFTER RBIND
+        }
+        else{
+          df6<-data.frame(matrix(nrow=8,ncol=7*length(MIdays)/2))
+          #colnames(df6)<-rep(c(colnames(df3),rep('',7-length(colnames(df3)))),length(MIdays)/2) MOVE TO AFTER RBIND
+        }
+        df6s<-data.frame(matrix(nrow=length(df3)*((length(df3)-1)/2)+1,ncol=length(colnames(df6))))
+        rownames(df6)<-c('Start Date','Stop Date',' ','Dead','alive','Total','%Dead','  ')
+        
+        for(index in 1:as.integer(length(MIdays)/2)){
+          start<-MIdays[index*2-1]
+          stop<-MIdays[index*2]
+          if((length(colnames(df3))+1)>6){
+              df6[1,1+(index-1)*(length(colnames(df3))+1)]<-start
+              df6[2,1+(index-1)*(length(colnames(df3))+1)]<-stop
+            }
+            else{
+              df6[1,1+(index-1)*7]<-start
+              df6[2,1+(index-1)*7]<-stop
+            }
+          for(t in 1:length(colnames(df3))){
+            dead<-0
+            alive<-0
+            for(v in 1:length(df3[,t])){
+              if(!is.na(df3[v,t])&df3[v,t]>=MIdays[index*2-1]){
+                if(df3[v,t]<=MIdays[index*2]){
+                  dead=dead+1
+                }
+                else{
+                  alive=alive+1
+                }
+              }
+            }
+            if((length(colnames(df3))+1)>6){
+              df6[4,t+(index-1)*(length(colnames(df3))+1)]<-dead
+              df6[5,t+(index-1)*(length(colnames(df3))+1)]<-alive
+              df6[6,t+(index-1)*(length(colnames(df3))+1)]<-dead+alive
+              df6[7,t+(index-1)*(length(colnames(df3))+1)]<-100*(dead/(alive+dead))
+            }
+            else{
+              df6[4,t+(index-1)*7]<-dead
+              df6[5,t+(index-1)*7]<-alive
+              df6[6,t+(index-1)*7]<-dead+alive
+              df6[7,t+(index-1)*7]<-100*(dead/(alive+dead))
+            }
+          }
+          if((length(colnames(df3))+1)>6){
+              fisherDF<-df6[4:5,(1+(index-1)*(length(colnames(df3))+1)):(length(colnames(df3))+(index-1)*(length(colnames(df3))+1))]
+              colnames(fisherDF)<-colnames(df3)
+              fisherTest<-pairwise_fisher_test(fisherDF)
+              df6s[1:nrow(df6s),(1+(index-1)*(length(colnames(df3))+1)):(6+(index-1)*(length(colnames(df3))+1))]<-rbind(colnames(fisherTest),fisherTest)
+            }
+            else{
+              fisherDF<-df6[4:5,(1+(index-1)*7):(length(colnames(df3))+(index-1)*7)]
+              colnames(fisherDF)<-colnames(df3)
+              fisherTest<-pairwise_fisher_test(fisherDF)
+              df6s[1:nrow(df6s),(1+(index-1)*7):(6+(index-1)*7)]<-rbind(colnames(fisherTest),fisherTest)
+            }
+          
+          
+        }
+        df6<-rbind(df6,df6s)
+        if((length(colnames(df3))+1)>6){
+          colnames(df6)<-rep(c(colnames(df3),''),length(MIdays)/2) 
+        }
+        else{
+          colnames(df6)<-rep(c(colnames(df3),rep('',7-length(colnames(df3)))),length(MIdays)/2) 
+        }
+      }
+      else{
+        print("Error: Mortality Index dates improperly formatting. Start and stop dates must be included for each index")
+      }
+    }
+    
+    #Figure
+    if (!is.na(colors)){
+      ggplot(df3s,aes(x=names,y=mean))+geom_col(fill=colors)+geom_errorbar(aes(ymax=mean+SEM,ymin=mean))
+    }else{
+      ggplot(df3s,aes(x=names,y=mean))+geom_col()+geom_errorbar(aes(ymax=mean+SEM,ymin=mean))
+    }
+    
+
+   
+    excel_List<-list("Average Lifespan Summary"=t(df3s[,-length(colnames(df3s))]),
+                   "Pairwise Log-Rank Test"=data.frame(lr_p[3]),
+                    "Percent Alive"=df5,
+                   "Dates of Death"=df3,
+                   "Average Lifespan t-tests (adj)"=data.frame(tt_p[3])
+                   )
+    }
+    
+  if(!(is.na(MIdays)||is.null(MIdays)||length(MIdays)==0||length(MIdays)%%2==1)){
+      excel_List<-append(excel_List,list("Mortality Index"=df6))
+      }  
+  if(keepOGData){
+      excel_List<-append(excel_List,list("Original Counts"=df))
+    }
+    
+    write.xlsx(excel_List,paste(z,'.xlsx',sep=''),rowNames=TRUE)
+  }
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
