@@ -8,8 +8,7 @@ NOTE: Right censoring can occur when "when a subject leaves the study before an 
 TO DO:
 1. FIX COX HAZARD MODEL
 2. EXPORT .pptx FIGURES
-3. EXCEL SHEET TEMPLATE
-4. Export Excel Sheet with Day of Death
+
 
 ```{r}
 #CUSTOMIZE THE FOLLOWING VARIABLES FOR EACH ANALYSIS
@@ -36,7 +35,7 @@ MIdays<-c(7,8)
 ageAtStart<-1
 
 #First column with data
-firstCol<-2
+firstCol<-3
 
 #Number of conditions. If NA, firstCol and all columns after firstCol are considered a condition
 numCons<-NA
