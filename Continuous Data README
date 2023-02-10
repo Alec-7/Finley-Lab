@@ -1,0 +1,21 @@
+Assay: Any assay that produces continuous data.
+
+Output: An .xlsx file with 2 or more sheets:
+1. Summary Statistics: The mean, standard deviation, standard error of the mean, and n value for each condition within each measurement.
+2. Preliminary Tests: A series of statistical tests, which determines if and what pairwise comparisons are valid. The following decision tree is followed:
+  1. Kolmogorov-Smirnov test: Determines if the data is not normally distributed.
+    p>0.05: One-way ANOVA to determine if the groups are significantly different from each other.
+      p>0.05: No groups are significantly different from each other, so pairwise comparisons are not appropiate.
+      p<0.05: Levene test: Determines if the variances are different across conditions:
+        p>0.05: Tukey Post-Hoc test for pairwise comparisons
+        p<0.05: Games-Howell test for pairwise comparisons
+    p<0.05: Kruskal-Wallis test to determine if the groups are significantly different from each other.
+      p>0.05: No groups are significantly different from each other, so pairwise comparisons are not appropiate.
+      p<0.05: Dunn test for pairwise comparisons
+Any pairwise comparison(s) are stored as individual sheets.
+
+Each column represents an experiment, while each row represents a sample. One column stores what condition each sample is from.
+
+To exclude a sample from an experiment, leave the corresponding cell blank.
+
+See comments in the code for instructions on altering variables for each analysis.
