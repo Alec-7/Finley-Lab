@@ -1,4 +1,3 @@
-#Aging README
 Assay: The number of flies that die every day or several days (typically 3 times a week) is recorded until all flies are dead.
 
 Output: A folder, with a .xlsx file for each experiment processed. Each file will have at least 5 sheets:
